@@ -20,7 +20,7 @@ The project also features a basic memory system using a ChromaDB vector store to
 
 -   Python 3.6+
 -   [Ollama](https://ollama.ai/) installed and running.
--   The language models you want to use (e.g., `phi3:mini`, `gemma:2b`, `qwen:4b`) downloaded and available in Ollama.
+-   Some language models you could use (e.g., `phi3:mini`, `gemma:2b`, `qwen:4b`) downloaded and available in Ollama.
 
 ## Setup
 
@@ -51,13 +51,35 @@ The project also features a basic memory system using a ChromaDB vector store to
 
 ## Usage
 
-To run the application, simply execute the `app.py` script:
+There are two ways to run the Persona Panel application:
+
+### Graphical User Interface
+
+To use the web-based graphical interface, run the `app.py` script:
 
 ```bash
-python app.py
+streamlit run app.py
 ```
 
-The application will then prompt you to enter an ethical question for the debate. The debate will proceed, and a transcript will be saved in the `transcripts` directory.
+This will open a new tab in your web browser with the application's user interface.
+
+### Command-Line Interface
+
+To use the command-line interface, run the `app_CLI.py` script:
+
+```bash
+python app_CLI.py
+```
+
+The application will then prompt you to enter an ethical question for the debate in your terminal.
+
+## Application vs. Command-Line Interface
+
+This project includes two different front-ends for the debate simulation:
+
+-   **`app.py` (Web Application):** This is a graphical user interface built with [Streamlit](https://streamlit.io/). It allows you to run debates, view transcripts, and interact with the application through your web browser. This is the recommended way to use the application for a more user-friendly experience.
+
+-   **`app_CLI.py` (Command-Line Interface):** This is a command-line application that runs entirely in your terminal. It provides the same debate functionality as the web application but without a graphical interface. This is useful for users who prefer to work in the terminal or for scripting and automation purposes.
 
 ## How It Works
 

@@ -4,23 +4,24 @@ import sqlite3
 import chromadb
 from sentence_transformers import SentenceTransformer
 import datetime
-import pathlib
+import re
+import glob  
+import streamlit as st
 
-# Program Goal:
-# Define the 3 "philosopher" personas.
-# Define the downloaded models.
-# Take your ethical question.
-# Execute the 3-phase debate (Opening, Rebuttal, Vote).
-# Print a full transcript of the debate.
+# --- Configuration (Moved some to Streamlit UI) ---
 
-# --- Configuration ---
+# --- NEW: Set up the Streamlit page ---
+st.set_page_config(
+    page_title="Local AI Persona Panel",
+    page_icon="🎙️",
+    layout="wide"
+)
 
-# 1. Define your "debaters" by mapping a persona to a model
-# Make sure these model names match your 'ollama list'
+# 1. Define your "debaters" (remains the same)
 PANELISTS = {
-    "Modern Liberal": "phi3:mini",
-    "Modern Conservative": "gemma:2b",
-    "Libertarian": "qwen:4b"
+    "Modern Liberal": "phi3:medium",
+    "Modern Conservative": "phi3:medium",
+    "Libertarian": "phi3:medium"
 }
 
 PERSONA_DESCRIPTIONS = {
@@ -44,47 +45,54 @@ PERSONA_DESCRIPTIONS = {
     both as attempts to use government power to control people."""
 }
 
-# 2. The question
-USER_QUESTION = input("Enter the ethical question for debate: ")
-
 # 3. The Ollama API endpoint
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 
-# # 4. The Database file 
+# 4. The Database files
 DB_FILE = "debate.db"
 VECTOR_DB_PATH = "vector_store"
 VECTOR_COLLECTION_NAME = "debate_history"
 
-# Init Embedding Model and Vector DB
-print("\n[Initializing vector database for historical context...]\n")
-try:
-    EMBEDDING_MODEL = SentenceTransformer('all-MiniLM-L6-v2')
-    print("[Embedding model loaded successfully.]\n")
-except Exception as e:
-    print(f"Error loading embedding model: {e}\n")
-    print("Please ensure 'sentence-transformers' is installed and the model is available.\n")
-    exit()
-try:
-    CHROMA_CLIENT = chromadb.PersistentClient(path=VECTOR_DB_PATH)
-    CHROMA_COLLECTION = CHROMA_CLIENT.get_or_create_collection(name=VECTOR_COLLECTION_NAME)
-    print(f"[Vector database connected at '{VECTOR_DB_PATH}'.]\n")
-except Exception as e:
-    print(f"Error initializing vector database: {e}\n")
-    print("Please ensure 'chromadb' is installed and the path is accessible.\n")
-    exit()
+# --- NEW: Cache the models and DB connection ---
+# @st.cache_resource is a decorator that tells Streamlit to run
+# this function *once* and keep the result in memory.
+# This prevents reloading the embedding model every time we click a button.
 
-# --- End of Configuration ---
+@st.cache_resource
+def get_embedding_model():
+    print("[Cache Miss] Loading embedding model...")
+    try:
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+        print("[Embedding model loaded.]")
+        return model
+    except Exception as e:
+        st.error(f"Error loading embedding model: {e}")
+        return None
+
+@st.cache_resource
+def get_chroma_client():
+    print("[Cache Miss] Connecting to ChromaDB...")
+    try:
+        client = chromadb.PersistentClient(path=VECTOR_DB_PATH)
+        collection = client.get_or_create_collection(name=VECTOR_COLLECTION_NAME)
+        print(f"[Vector database connected at '{VECTOR_DB_PATH}'.]")
+        return collection
+    except Exception as e:
+        st.error(f"Error connecting to ChromaDB: {e}")
+        return None
+
+# Load the models
+EMBEDDING_MODEL = get_embedding_model()
+CHROMA_COLLECTION = get_chroma_client()
+
+
+# --- All backend functions (init_db, get_historical_context, etc.) ---
+# --- MODIFIED: Replaced all 'print' with 'st.info' or 'st.warning' ---
 
 def init_db():
-    """
-    Initializes the SQLite database to store debate transcripts.
-    and the ChromaDB collection for vector embeddings.
-    """
-    # SQL DB
+    # (This function is unchanged)
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    
-    # Create table if it doesn't exist
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS debates (
         debate_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,71 +101,79 @@ def init_db():
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-
-    # Create 'arguments' table
-    # This stores every single argument made
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS arguments (
         argument_id INTEGER PRIMARY KEY AUTOINCREMENT,
         debate_id INTEGER NOT NULL,
         persona TEXT NOT NULL,
         model TEXT NOT NULL,
-        phase TEXT NOT NULL,  -- e.g., "opening", "rebuttal"
+        phase TEXT NOT NULL,
         argument_text TEXT NOT NULL,
         FOREIGN KEY (debate_id) REFERENCES debates (debate_id)
         )
     ''')
-
     conn.commit()
     conn.close()
+    st.info("SQL database and Vector database are ready.")
 
-    # ChromaDB collection is initialized gloabally
-    print("SQL database initialized.\n")
-
+# --- NEW: v3.1 - A "Safer" Learning Function ---
 def get_historical_context(persona, question):
     """
     Queries the ChromaDB vector store for semantically similar
-    past arguments to build a relevant history.
+    past arguments. This *new* version creates a "safer" prompt
+    that is less likely to confuse the models.
     """
-    print(f"\n[Searching vector database for relevant history for {persona}...] \n")
+    st.info(f"[Searching vector database for relevant history for {persona}...] \n")
+    
     try:
+        # 1. Convert the new question into a vector
         question_embedding = EMBEDDING_MODEL.encode(question).tolist()
+        # 2. Query ChromaDB
+        # Find the 2 most similar arguments this persona has made in the past.
         results = CHROMA_COLLECTION.query(
             query_embeddings=[question_embedding],
             n_results=2,
-            where={"persona": persona} # Filter by persona
+            where={"persona": persona} # Only find arguments from this persona
         )
-
         history = ""
-        if results["documents"] and results["metadatas"]:
-            for i, (doc, meta) in enumerate(zip(results["documents"][0], results["metadatas"][0])):
-                outcome = "WON" if meta.get('is_winner') else "LOST"
-                history += f"**A similar argument you made in the past that {outcome}:**\n\"{doc}\"\n\n"
+        win_count = 0
+        loss_count = 0
+        if results['documents'] and results['metadatas']:
+            for i, (doc, meta) in enumerate(zip(results['documents'][0], results['metadatas'][0])):
+                if meta.get('is_winner'):
+                    win_count += 1
+                else:
+                    loss_count += 1
+        
+        # --- THIS IS THE KEY ---
+        # Instead of returning the full, "poisonous" text,
+        # we return a simple, one-line summary.
+        if win_count > 0 and loss_count > 0:
+            history = "In the past, your arguments on this topic have had mixed results. Be persuasive."
+        elif win_count > 0:
+            history = "Your past arguments on this topic have been very successful. Keep it up."
+        elif loss_count > 0:
+            history = "Your past arguments on this topic have lost. You must change your strategy to be more persuasive."
+
         if history:
-            print(history)
-            return "--- RELEVANT HISTORICAL CONTEXT ---\n" + history + "--- END OF CONTEXT ---\n"
+            return "--- RELEVANT HISTORICAL CONTEXT ---\n" + history + "\n--- END CONTEXT ---\n"
         else:
-            return "No relevant history found for this specifc topic. Good luck!\n"
+            return "No relevant history found for this specific topic. Good luck.\n"
+            
     except Exception as e:
-        print(f"Error querying vector database: {e}\n")
-        return "No relevant history found due to an error. Proceeding without context.\n"
-    
+        st.error(f"Error querying vector database: {e}")
+        return "Error reading vector history. Relying on base logic.\n"
+
 def log_debate_to_db(question, winning_persona, arguments_log):
-    """Logs the entire debate and its outcome to the databases."""
-    print("\n[Logging debate results to databases...]\n")
+    st.info("[Logging debate results to SQL and Vector databases...]")
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        
-        # 1. Log the debate
         cursor.execute("INSERT INTO debates (question, winning_persona) VALUES (?, ?)", (question, winning_persona))
-        debate_id = cursor.lastrowid # Get the ID of the debate we just logged
-        
+        debate_id = cursor.lastrowid
         chroma_ids = []
         chroma_documents = []
         chroma_metadatas = []
-
-        # 2. Log all arguments
         for persona, phases in arguments_log.items():
             if "rebuttal" in phases:
                 model = PANELISTS[persona]
@@ -166,7 +182,6 @@ def log_debate_to_db(question, winning_persona, arguments_log):
                 INSERT INTO arguments (debate_id, persona, model, phase, argument_text)
                 VALUES (?, ?, ?, ?, ?)
                 ''', (debate_id, persona, model, "rebuttal", argument_text))
-
                 argument_id = cursor.lastrowid
                 chroma_ids.append(f"arg_{argument_id}")
                 chroma_documents.append(argument_text)
@@ -175,183 +190,152 @@ def log_debate_to_db(question, winning_persona, arguments_log):
                     "debate_id": debate_id,
                     "is_winner": (persona == winning_persona)
                 })
-        
         conn.commit()
         conn.close()
-        print("Debate successfully logged to SQL DB.")
-
+        st.success("Debate successfully logged to SQL database.")
+        
         if chroma_documents:
             embeddings = EMBEDDING_MODEL.encode(chroma_documents).tolist()
-
             CHROMA_COLLECTION.add(
                 embeddings=embeddings,
                 documents=chroma_documents,
                 metadatas=chroma_metadatas,
                 ids=chroma_ids
             )
-            print("Debate arguments successfully logged to vector database.\n")
-        
+            st.success("Arguments successfully embedded and logged to Vector database.")
+
     except Exception as e:
-        print(f"Error logging to database: {e}")
+        st.error(f"Error logging to databases: {e}")
+
 
 def get_model_response(model_name, prompt):
-    """
-    Sends a prompt to a specific model running in Ollama and gets a response.
-    """
-    print(f"[Querying {model_name} for its thoughts...]\n")
-    
-    # This is the data we send to the Ollama API
-    payload = {
-        "model": model_name,
-        "prompt": prompt,
-        "stream": False  # We want the full response at once
-    }
-    
-    try:
-        # Make the API call
-        response = requests.post(OLLAMA_API_URL, json=payload, timeout=300) # 5 min timeout
-        response.raise_for_status()  # Raise an error for bad responses
-        
-        # Parse the JSON response
-        data = response.json()
-        
-        # The 'response' field contains the model's full text
-        return data.get("response").strip()
-        
-    except requests.exceptions.Timeout:
-        print(f"Error: The request to {model_name} timed out.")
-        return None
-    except requests.exceptions.RequestException as e:
-        print(f"Error communicating with Ollama API for {model_name}: {e}")
-        return None
+    # This function now writes to the UI *before* the call
+    with st.spinner(f"Querying {model_name} for its thoughts..."):
+        payload = {"model": model_name, "prompt": prompt, "stream": False}
+        try:
+            response = requests.post(OLLAMA_API_URL, json=payload, timeout=300)
+            response.raise_for_status()
+            data = response.json()
+            return data.get("response").strip()
+        except requests.exceptions.Timeout:
+            st.error(f"Error: The request to {model_name} timed out.")
+            return None
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error communicating with Ollama API for {model_name}: {e}")
+            return None
 
-def save_transcript_to_file(transcript_log):
-    """Saves the collected transcript log to a timestamped text file."""
-    
-    # Create a unique, clean filename
-    transcript_dir = pathlib.Path("transcripts")
+
+def save_transcript_to_file(transcript_log, user_question):
+    # This function is now passed the question
     now = datetime.datetime.now()
     timestamp = now.strftime("%Y%m%d_%H%M%S")
-    filename = f"debate_{timestamp}.txt"
+    safe_question = re.sub(r'[^\w\s]', '', user_question.lower())
+    safe_question_snippet = "_".join(safe_question.split()[:5])
+    filename = f"debate_{timestamp}_{safe_question_snippet}.txt"
     
-    print(f"\n[Saving full transcript to: {filename}]")
-
+    st.info(f"Saving full transcript to: {filename}")
     try:
-        transcript_dir.mkdir(exist_ok=True)  # Create directory if it doesn't exist
-        file_path = transcript_dir / filename
-        file_path.write_text("\n".join(transcript_log), encoding="utf-8")
-        print("[Transcript saved successfully.]")
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write("\n".join(transcript_log))
+        st.success("[Transcript saved successfully.]")
     except IOError as e:
-        print(f"Error saving transcript file: {e}")
+        st.error(f"Error saving transcript file: {e}")
 
-def run_debate():
+
+# --- Main Debate Logic (Modified for Streamlit) ---
+
+def run_debate(user_question):
     """
     Orchestrates the entire 3-phase debate and saves a transcript.
+    This function now uses st.write/st.markdown to print.
     """
     
     # --- NEW: List to store the full transcript ---
     transcript_log = []
     
-    header = "=============================================="
-    title = "    Ethical Debate Panel Has Convened!     "
+    st.markdown("---")
+    st.header("🎙️ Persona Panel Has Convened!")
+    st.markdown("---")
+    transcript_log.append("==============================================" \
+                          "\n    Ethical Debate Panel Has Convened!     \n" \
+                          "==============================================")
     
-    print(header)
-    print(title)
-    print(header)
-    transcript_log.append(header + "\n" + title + "\n" + header)
-    
-    question_line = f"\nTonight's question: {USER_QUESTION}\n"
-    print(question_line)
+    question_line = f"\nTonight's question: {user_question}\n"
+    st.subheader(f"Tonight's question: {user_question}")
     transcript_log.append(question_line)
 
-    phase1_header = "Let's begin with opening statements...\n"
-    divider = "----------------------------------------------\n"
-    print(phase1_header)
-    print(divider)
-    transcript_log.append(phase1_header + "\n" + divider)
+    st.markdown("---")
+    st.subheader("Phase 1: Opening Statements")
+    transcript_log.append("\nPhase 1: Opening Statements\n" + "-"*30)
     
     arguments_log = {persona: {} for persona in PANELISTS}
     votes = {}
 
     # --- PHASE 1: OPENING STATEMENTS ---
     for persona, model in PANELISTS.items():
-        historical_context = get_historical_context(persona, USER_QUESTION)
-        
+        historical_context = get_historical_context(persona, user_question)
         persona_desc = PERSONA_DESCRIPTIONS.get(persona, f"You are a {persona}.")
-
         prompt_template = f"""
         {persona_desc}
-        Your goal is to form the most persuasive and ethically 
-        sound argument to win this debate.
+
+        Here is some context from past debates.
+        Use only to inform your argument.
         {historical_context}
-        **Your Task:**
-        Analyze this ethical question: "{USER_QUESTION}"
-        Write a concise, one-paragraph opening statement.
-        Learn from history, but stay true to your core principles.
+
+        **YOUR PRIMARY TASK:**
+        Write a concise, one-paragraph opening statement that *only*
+        addresses the new question: "{user_question}"
         """
         
         statement = get_model_response(model, prompt_template)
         
         if statement:
             arguments_log[persona]["opening"] = statement
-            
-            # --- NEW: Log to transcript ---
-            line = f" {persona} ({model}):\n{statement}\n"
-            print(line)
-            print(divider)
-            transcript_log.append(line + "\n" + divider)
+            st.markdown(f"**🎙️ {persona} ({model}):**")
+            st.markdown(statement)
+            transcript_log.append(f"🎙️ {persona} ({model}):\n{statement}\n" + "-"*30)
         
         time.sleep(1)
 
     # --- PHASE 2: REBUTTALS ---
-    phase2_header = "\n==============================================\n" \
-                    "           Phase 2: Rebuttals            \n" \
-                    "==============================================\n" \
-                    "\nEach panelist will now respond to the others.\n"
-    print(phase2_header)
-    transcript_log.append(phase2_header)
+    st.markdown("---")
+    st.subheader("Phase 2: Rebuttals")
+    st.write("Each panelist will now respond to the others.")
+    transcript_log.append("\nPhase 2: Rebuttals\n" + "-"*30)
     
     all_args = ""
     for persona, phases in arguments_log.items():
         all_args += f"Argument from {persona}:\n{phases.get('opening', 'N/A')}\n\n"
 
     for persona, model in PANELISTS.items():
-        own_statement = arguments_log.get(persona, {}).get('opening', "my previously stated position")
-        
+        # own_statement = arguments_log.get(persona, {}).get('opening', "my previously stated position")
         prompt_template = f"""
-        You are a {persona} philosopher.
-        Your initial argument was: "{own_statement}"
-        Now, consider the *other* arguments on the table:
+        {PERSONA_DESCRIPTIONS.get(persona)}
+
+        Here are the opening statements from your opponents:
         {all_args}
-        Write a one-paragraph rebuttal that defends your 
-        original position and *counters the other arguments*. 
-        Your goal is to win the vote.
+
+        **Your Task:**
+        Write a single, persuasive paragraph that *rebuts* your opponents' arguments from *your* perspective.
         """
         
         rebuttal = get_model_response(model, prompt_template)
         
         if rebuttal:
             arguments_log[persona]["rebuttal"] = rebuttal
-            
-            # --- NEW: Log to transcript ---
-            line = f" {persona} ({model})'s Rebuttal:\n{rebuttal}\n"
-            print(line)
-            print(divider)
-            transcript_log.append(line + "\n" + divider)
-            
+            st.markdown(f"**🗣️ {persona} ({model})'s Rebuttal:**")
+            st.markdown(rebuttal)
+            transcript_log.append(f"🗣️ {persona} ({model})'s Rebuttal:\n{rebuttal}\n" + "-"*30)
         time.sleep(1)
 
     # --- PHASE 3: THE VOTE ---
-    phase3_header = "\n==============================================\n" \
-                    "            Phase 3: The Vote              \n" \
-                    "==============================================\n" \
-                    "\nAll arguments are in. Time for the panel to vote.\n"
-    print(phase3_header)
-    transcript_log.append(phase3_header)
+    st.markdown("---")
+    st.subheader("Phase 3: The Vote")
+    st.write("All arguments are in. Time for the panel to vote.")
+    transcript_log.append("\nPhase 3: The Vote\n" + "-"*30)
 
     final_arguments_text = ""
     persona_map = {}
-    
     i = 1
     for persona, phases in arguments_log.items():
         arg_text = phases.get('rebuttal', phases.get('opening', 'N/A'))
@@ -361,11 +345,7 @@ def run_debate():
         
     for persona, model in PANELISTS.items():
         prompt_template = f"""
-        You are now an impartial judge. Your personal philosophy is irrelevant.
-        Your task is to vote on which of the following arguments is the 
-        most persuasive, well-reasoned, and ethically sound solution.
-        Here are the final arguments:
-        {final_arguments_text}
+        You are now an impartial judge...
         Which argument do you vote for? 
         Respond *only* with the argument number (e.g., "1", "2", or "3").
         """
@@ -377,35 +357,25 @@ def run_debate():
             if cleaned_vote and cleaned_vote[0] in persona_map:
                 final_vote = cleaned_vote[0]
                 votes[persona] = final_vote
-                
-                # --- NEW: Log to transcript ---
-                line = f"{persona} ({model}) votes for: Argument {final_vote}\n"
-                print(line)
+                line = f"🗳️ {persona} ({model}) votes for: Argument {final_vote}"
+                st.write(line)
                 transcript_log.append(line)
             else:
                 votes[persona] = "Spoiled"
-                
-                # --- NEW: Log to transcript ---
-                line = f" {persona} ({model}) spoiled its ballot.\n"
-                print(line)
+                line = f"🗳️ {persona} ({model}) spoiled its ballot."
+                st.write(line)
                 transcript_log.append(line)
-        
         time.sleep(1)
 
     # --- FINAL TALLY & LOGGING ---
-    results_header = "\n==============================================\n" \
-                     "            Final Results              \n" \
-                     "==============================================\n"
-    print(results_header)
-    transcript_log.append(results_header)
+    st.markdown("---")
+    st.subheader("Final Results")
+    transcript_log.append("\nFinal Results\n" + "-"*30)
     
     vote_counts = {"Spoiled": 0}
-    for i in persona_map.keys():
-        vote_counts[i] = 0
-
+    for i in persona_map.keys(): vote_counts[i] = 0
     for vote in votes.values():
-        if vote in vote_counts:
-            vote_counts[vote] += 1
+        if vote in vote_counts: vote_counts[vote] += 1
             
     winner_vote_num = max(vote_counts, key=vote_counts.get)
     winning_persona = "TIE"
@@ -414,23 +384,21 @@ def run_debate():
         counts = list(vote_counts.values())
         if counts.count(vote_counts[winner_vote_num]) == 1:
             winning_persona = persona_map.get(winner_vote_num, "Error")
-            
-            # --- NEW: Log to transcript ---
-            line = f"\n The winner is: {winning_persona} (Argument {winner_vote_num})!\n"
-            print(line)
+            line = f"🎉 The winner is: {winning_persona} (Argument {winner_vote_num})! 🎉"
+            st.header(line)
             transcript_log.append(line)
         else:
-            line = "\n The vote resulted in a TIE. No winner recorded.\n"
-            print(line)
+            line = "⚖️ The vote resulted in a TIE. No winner recorded. ⚖️"
+            st.header(line)
             transcript_log.append(line)
     else:
-        line = "\nThe vote was spoiled or a TIE. No winner recorded.\n"
-        print(line)
+        line = "⚖️ The vote was spoiled or a TIE. No winner recorded. ⚖️"
+        st.header(line)
         transcript_log.append(line)
         
-    tally_header = "--- Final Vote Tally ---"
-    print(tally_header)
-    transcript_log.append("\n" + tally_header)
+    st.markdown("---")
+    st.subheader("Final Vote Tally")
+    transcript_log.append("\n--- Final Vote Tally ---")
     
     for vote_num, count in vote_counts.items():
         if vote_num == "Spoiled":
@@ -438,27 +406,55 @@ def run_debate():
         else:
             persona = persona_map.get(vote_num, "Unknown")
             line = f"Argument {vote_num} ({persona}): {count} vote(s)"
-        print(line)
+        st.write(line)
         transcript_log.append(line)
 
     if winning_persona != "TIE":
-        log_debate_to_db(USER_QUESTION, winning_persona, arguments_log)
+        log_debate_to_db(user_question, winning_persona, arguments_log)
+
     else:
         line = "\n[No clear winner; debate will not be logged to history.]\n"
-        print(line)
+        st.warning(line)
         transcript_log.append(line)
 
-    end_line = "==============================================" \
-               "\n          Debate Concluded.             \n" \
-               "=============================================="
-    print(end_line)
-    transcript_log.append("\n" + end_line)
+    transcript_log.append("\n==============================\n" \
+                          "      Debate Concluded.             \n" \
+                          "==============================")
     
-    # --- NEW: Call the function to save the file ---
-    save_transcript_to_file(transcript_log)
+    save_transcript_to_file(transcript_log, user_question)
 
 
-# --- This line runs the whole program ---
+# --- NEW: Main Streamlit App Interface ---
+
+st.title("Local AI Persona Panel 🎙️")
+
+# --- NEW: Sidebar for viewing logs ---
+st.sidebar.title("Debate Log Viewer")
+log_files = sorted(glob.glob("debate_*.txt"), reverse=True)
+if not log_files:
+    st.sidebar.write("No debate transcripts found.")
+else:
+    selected_log = st.sidebar.selectbox("Select a debate to view:", log_files)
+    if selected_log:
+        try:
+            with open(selected_log, 'r', encoding='utf-8') as f:
+                st.sidebar.text_area("Transcript", f.read(), height=500)
+        except Exception as e:
+            st.sidebar.error(f"Error reading file: {e}")
+
+# --- NEW: Main debate interface ---
+st.header("Start a New Debate")
+user_question_input = st.text_input("Enter the ethical question for debate:")
+
+if st.button("Run Debate 🚀"):
+    if user_question_input:
+        # This is where the magic happens
+        # We call the main function, and all st.write()
+        # calls inside it will stream to the UI.
+        run_debate(user_question_input)
+    else:
+        st.warning("Please enter a question for the debate.")
+
+# --- NEW: Run the DB init on startup ---
 if __name__ == "__main__":
     init_db()
-    run_debate()
