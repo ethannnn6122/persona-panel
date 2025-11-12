@@ -4,60 +4,78 @@ import sqlite3
 import chromadb
 from sentence_transformers import SentenceTransformer
 import datetime
+import os
 import re
 import glob  
 import streamlit as st
 
 # --- Configuration (Moved some to Streamlit UI) ---
 
-# --- NEW: Set up the Streamlit page ---
-st.set_page_config(
-    page_title="Local AI Persona Panel",
-    page_icon="🎙️",
-    layout="wide"
-)
-
-# 1. Define your "debaters" (remains the same)
-PANELISTS = {
-    "Modern Liberal": "phi3:medium",
-    "Modern Conservative": "phi3:medium",
-    "Libertarian": "phi3:medium"
-}
-
-PERSONA_DESCRIPTIONS = {
-    "Modern Liberal": """You are a Modern Liberal. You believe that government has a moral 
-    obligation to care for its citizens and address systemic inequalities. 
-    Your analysis must prioritize fairness, community well-being, and 
-    environmental protection. You see collective action, led by the 
-    government, as the best way to achieve a just society.""",
-    
-    "Modern Conservative": """You are a Modern Conservative. You believe in individual liberty, 
-    personal responsibility, and the power of the free market. Your analysis 
-    must prioritize limited government, economic freedom, and a strong rule of 
-    law. You believe that the best solutions come from individual actors 
-    and private institutions, not government bureaucracy.""",
-    
-    "Libertarian": """You are a Libertarian. Your single, core belief is in maximum 
-    individual freedom. Your analysis must oppose any government 
-    intervention—economic or social—that is not absolutely necessary 
-    to protect the life, liberty, and property of individuals. You are 
-    skeptical of both the Liberal and Conservative positions, as you see 
-    both as attempts to use government power to control people."""
-}
-
 # 3. The Ollama API endpoint
 OLLAMA_API_URL = "http://localhost:11434/api/generate"
 
+# Data dir for persistent data
+DATA_DIR = "app_data"
+
 # 4. The Database files
-DB_FILE = "debate.db"
-VECTOR_DB_PATH = "vector_store"
+DB_FILE = os.path.join(DATA_DIR, "debate.db")
+VECTOR_DB_PATH = os.path.join(DATA_DIR, "vector_store")
+TRANSCRIPT_DIR = os.path.join(DATA_DIR, "transcripts")
+VOTETRANSCRIPT_DIR = os.path.join(TRANSCRIPT_DIR, "vote_transcripts")
+
 VECTOR_COLLECTION_NAME = "debate_history"
+
+# --- Set up the Streamlit page ---
+st.set_page_config(
+    page_title="Local AI Persona Panel",
+    page_icon="🎤",
+    layout="wide"
+)
+
+# st.write("Folder Watch Blacklist:", st.get_option("server.folderWatchBlacklist"))
+
+# 1. Define your "debaters"
+if 'PANELISTS' not in st.session_state:
+    st.session_state.PANELISTS = {
+        "Modern Liberal": "phi3:medium",
+        "Modern Conservative": "phi3:medium",
+        "Libertarian": "phi3:medium"
+}
+    
+if 'PERSONA_DESCRIPTIONS' not in st.session_state:
+    st.session_state.PERSONA_DESCRIPTIONS = {
+        "Modern Liberal": """You are a Modern Liberal. You believe that government has a moral 
+        obligation to care for its citizens and address systemic inequalities. 
+        Your analysis must prioritize fairness, community well-being, and 
+        environmental protection. You see collective action, led by the 
+        government, as the best way to achieve a just society.""",
+    
+        "Modern Conservative": """You are a Modern Conservative. You believe in individual liberty, 
+        personal responsibility, and the power of the free market. Your analysis 
+        must prioritize limited government, economic freedom, and a strong rule of 
+        law. You believe that the best solutions come from individual actors 
+        and private institutions, not government bureaucracy.""",
+        
+        "Libertarian": """You are a Libertarian. Your single, core belief is in maximum 
+        individual freedom. Your analysis must oppose any government 
+        intervention—economic or social—that is not absolutely necessary 
+        to protect the life, liberty, and property of individuals. You are 
+        skeptical of both the Liberal and Conservative positions, as you see 
+        both as attempts to use government power to control people."""
+}
+if 'transcript_view' not in st.session_state:
+    st.session_state.transcript_view = "Full Transcripts"
+if 'full_log_files' not in st.session_state:
+    st.session_state.full_log_files = sorted(glob.glob(f"{TRANSCRIPT_DIR}/debate_*.txt"), reverse=True)
+if 'voting_log_files' not in st.session_state:
+    st.session_state.voting_log_files = sorted(glob.glob(f"{TRANSCRIPT_DIR}/voting_*.txt"), reverse=True)
+if 'log_content_cache' not in st.session_state:
+    st.session_state.log_content_cache = {"file": None, "content": None}
 
 # --- NEW: Cache the models and DB connection ---
 # @st.cache_resource is a decorator that tells Streamlit to run
 # this function *once* and keep the result in memory.
 # This prevents reloading the embedding model every time we click a button.
-
 @st.cache_resource
 def get_embedding_model():
     print("[Cache Miss] Loading embedding model...")
@@ -80,17 +98,12 @@ def get_chroma_client():
     except Exception as e:
         st.error(f"Error connecting to ChromaDB: {e}")
         return None
-
-# Load the models
-EMBEDDING_MODEL = get_embedding_model()
-CHROMA_COLLECTION = get_chroma_client()
-
-
-# --- All backend functions (init_db, get_historical_context, etc.) ---
-# --- MODIFIED: Replaced all 'print' with 'st.info' or 'st.warning' ---
-
+    
+@st.cache_resource
 def init_db():
-    # (This function is unchanged)
+    print("[Cache Miss] Init DB...")
+    os.makedirs(VECTOR_DB_PATH, exist_ok=True)
+    os.makedirs(TRANSCRIPT_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute('''
@@ -116,7 +129,10 @@ def init_db():
     conn.close()
     st.info("SQL database and Vector database are ready.")
 
-# --- NEW: v3.1 - A "Safer" Learning Function ---
+# Load the models
+EMBEDDING_MODEL = get_embedding_model()
+
+# A "Safer" Learning Function ---
 def get_historical_context(persona, question):
     """
     Queries the ChromaDB vector store for semantically similar
@@ -124,6 +140,7 @@ def get_historical_context(persona, question):
     that is less likely to confuse the models.
     """
     st.info(f"[Searching vector database for relevant history for {persona}...] \n")
+    CHROMA_COLLECTION = get_chroma_client()
     
     try:
         # 1. Convert the new question into a vector
@@ -165,7 +182,9 @@ def get_historical_context(persona, question):
         return "Error reading vector history. Relying on base logic.\n"
 
 def log_debate_to_db(question, winning_persona, arguments_log):
+    init_db()
     st.info("[Logging debate results to SQL and Vector databases...]")
+    CHROMA_COLLECTION = get_chroma_client()
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
@@ -176,7 +195,7 @@ def log_debate_to_db(question, winning_persona, arguments_log):
         chroma_metadatas = []
         for persona, phases in arguments_log.items():
             if "rebuttal" in phases:
-                model = PANELISTS[persona]
+                model = st.session_state.PANELISTS[persona]
                 argument_text = phases["rebuttal"]
                 cursor.execute('''
                 INSERT INTO arguments (debate_id, persona, model, phase, argument_text)
@@ -231,16 +250,106 @@ def save_transcript_to_file(transcript_log, user_question):
     timestamp = now.strftime("%Y%m%d_%H%M%S")
     safe_question = re.sub(r'[^\w\s]', '', user_question.lower())
     safe_question_snippet = "_".join(safe_question.split()[:5])
-    filename = f"debate_{timestamp}_{safe_question_snippet}.txt"
-    
+    base_filename = f"debate_{timestamp}_{safe_question_snippet}.txt"
+    filename = os.path.join(TRANSCRIPT_DIR, base_filename)
     st.info(f"Saving full transcript to: {filename}")
     try:
         with open(filename, 'w', encoding='utf-8') as f:
             f.write("\n".join(transcript_log))
         st.success("[Transcript saved successfully.]")
+        st.session_state.full_log_files = sorted(glob.glob(f"{TRANSCRIPT_DIR}/debate_*.txt"), reverse=True)
     except IOError as e:
         st.error(f"Error saving transcript file: {e}")
 
+def update_config():
+    # --- Panelist Configuration ---
+    with st.expander("⚙️ Manage Existing Panelist"):
+        st.subheader("Manage Debaters and Personas")
+
+        current_panelists = list(st.session_state.PANELISTS.keys())
+        if not current_panelists:
+            st.info("No panelists configured yet. Add one below!")
+
+        # Each panelist gets their own form to prevent conflicts
+        for persona_name in current_panelists:
+            with st.form(key=f"form_for_{persona_name}"):
+                st.markdown(f"#### Edit: {persona_name}")
+                
+                # --- WIDGETS ---
+                # These just *display* the current value
+                new_persona_name = st.text_input(
+                    "Panelist Name", 
+                    value=persona_name, 
+                    key=f"name_{persona_name}"
+                )
+                model_name = st.text_input(
+                    "Ollama Model", 
+                    value=st.session_state.PANELISTS[persona_name], 
+                    key=f"model_{persona_name}"
+                )
+                description = st.text_area(
+                    "Description",
+                    value=st.session_state.PERSONA_DESCRIPTIONS.get(persona_name, ""),
+                    key=f"desc_{persona_name}",
+                    height=150
+                )
+                
+                # --- ACTION BUTTONS ---
+                col1, col2 = st.columns([1, 1])
+                with col1:
+                    save_button = st.form_submit_button("Save Changes")
+                with col2:
+                    remove_button = st.form_submit_button(f"Remove {persona_name}", type="secondary")
+
+                # --- LOGIC ---
+                # This logic now *only* runs when a button is clicked
+                if save_button:
+                    # 1. Update the simple values
+                    st.session_state.PANELISTS[persona_name] = model_name
+                    st.session_state.PERSONA_DESCRIPTIONS[persona_name] = description
+
+                    st.info(f"[Updating panelist '{persona_name}'...]")
+                    # 2. Handle re-naming
+                    if new_persona_name != persona_name:
+                        # Copy data to new name
+                        st.session_state.PANELISTS[new_persona_name] = st.session_state.PANELISTS.pop(persona_name)
+                        st.session_state.PERSONA_DESCRIPTIONS[new_persona_name] = st.session_state.PERSONA_DESCRIPTIONS.pop(persona_name)
+                        st.info(f"[Renaming panelist '{persona_name}' to '{new_persona_name}'...]")
+                    
+                    st.success(f"Panelist '{new_persona_name}' saved!")
+                    st.rerun() # Re-run to update the form keys
+
+                if remove_button:
+                    st.info(f"[Removing panelist '{persona_name}'...]")
+                    # Delete the panelist
+                    del st.session_state.PANELISTS[persona_name]
+                    if persona_name in st.session_state.PERSONA_DESCRIPTIONS:
+                        del st.session_state.PERSONA_DESCRIPTIONS[persona_name]
+                    
+                    st.warning(f"Panelist '{persona_name}' removed.")
+                    st.rerun() # Re-run to remove the form
+
+def save_vote_transcript(voting_log, user_question):
+    """
+    Saves only the voting phase and final results to a separate transcript file.
+    """
+    os.makedirs(VOTETRANSCRIPT_DIR, exist_ok=True)
+    now= datetime.datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S")
+    safe_question = re.sub(r'[^\w\s]', '', user_question.lower())
+    safe_question_snippet = "_".join(safe_question.split()[:5])
+
+    base_filename = f"vote_transcript_{timestamp}_{safe_question_snippet}.txt"
+    filename = os.path.join(VOTETRANSCRIPT_DIR, base_filename)
+
+    st.info(f"Saving vote transcript to: {filename}")
+    try:
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write("\n".join(voting_log))
+        st.success("[Vote transcript saved successfully.]")
+        st.session_state.voting_log_files = sorted(glob.glob(f"{VOTETRANSCRIPT_DIR}/vote_transcript_*.txt"), reverse=True)
+    except IOError as e:
+        st.error(f"Error saving vote transcript file: {e}")
 
 # --- Main Debate Logic (Modified for Streamlit) ---
 
@@ -250,9 +359,10 @@ def run_debate(user_question):
     This function now uses st.write/st.markdown to print.
     """
     
-    # --- NEW: List to store the full transcript ---
+    # --- List to store the full transcript ---
     transcript_log = []
-    
+    voting_log = []
+
     st.markdown("---")
     st.header("🎙️ Persona Panel Has Convened!")
     st.markdown("---")
@@ -268,23 +378,21 @@ def run_debate(user_question):
     st.subheader("Phase 1: Opening Statements")
     transcript_log.append("\nPhase 1: Opening Statements\n" + "-"*30)
     
-    arguments_log = {persona: {} for persona in PANELISTS}
+    arguments_log = {persona: {} for persona in st.session_state.PANELISTS}
     votes = {}
 
     # --- PHASE 1: OPENING STATEMENTS ---
-    for persona, model in PANELISTS.items():
+    for persona, model in st.session_state.PANELISTS.items():
         historical_context = get_historical_context(persona, user_question)
-        persona_desc = PERSONA_DESCRIPTIONS.get(persona, f"You are a {persona}.")
+        persona_desc = st.session_state.PERSONA_DESCRIPTIONS.get(persona, f"You are a {persona}.")
         prompt_template = f"""
         {persona_desc}
-
-        Here is some context from past debates.
-        Use only to inform your argument.
         {historical_context}
 
-        **YOUR PRIMARY TASK:**
-        Write a concise, one-paragraph opening statement that *only*
-        addresses the new question: "{user_question}"
+        You are debating the question: "{user_question}"
+        
+        Write a concise, single-paragraph opening statement from your perspective.
+        Do not include any pre-amble.
         """
         
         statement = get_model_response(model, prompt_template)
@@ -307,16 +415,18 @@ def run_debate(user_question):
     for persona, phases in arguments_log.items():
         all_args += f"Argument from {persona}:\n{phases.get('opening', 'N/A')}\n\n"
 
-    for persona, model in PANELISTS.items():
+    for persona, model in st.session_state.PANELISTS.items():
         # own_statement = arguments_log.get(persona, {}).get('opening', "my previously stated position")
         prompt_template = f"""
-        {PERSONA_DESCRIPTIONS.get(persona)}
+        {st.session_state.PERSONA_DESCRIPTIONS.get(persona)}
 
-        Here are the opening statements from your opponents:
+        The debate is on: "{user_question}"
+        
+        Here are all the opening statements:
         {all_args}
 
-        **Your Task:**
-        Write a single, persuasive paragraph that *rebuts* your opponents' arguments from *your* perspective.
+        Write a single, persuasive rebuttal paragraph that responds to your opponents
+        from your perspective. Do not include any pre-amble.
         """
         
         rebuttal = get_model_response(model, prompt_template)
@@ -332,7 +442,10 @@ def run_debate(user_question):
     st.markdown("---")
     st.subheader("Phase 3: The Vote")
     st.write("All arguments are in. Time for the panel to vote.")
-    transcript_log.append("\nPhase 3: The Vote\n" + "-"*30)
+
+    phase_3_header = "\nPhase 3: The Vote\n" + "-"*30
+    transcript_log.append(phase_3_header)
+    voting_log.append(phase_3_header)
 
     final_arguments_text = ""
     persona_map = {}
@@ -343,16 +456,21 @@ def run_debate(user_question):
         persona_map[str(i)] = persona
         i += 1
         
-    for persona, model in PANELISTS.items():
+    for persona, model in st.session_state.PANELISTS.items():
         prompt_template = f"""
-        You are now an impartial judge...
-        Which argument do you vote for? 
-        Respond *only* with the argument number (e.g., "1", "2", or "3").
+        You are an impartial judge.
+        Here are the arguments:
+        {final_arguments_text}
+        
+        Which argument was most persuasive?
+        Respond *only* with the argument number (e.g., "1", "2", "3").
         """
         
         vote_raw = get_model_response(model, prompt_template)
         
         if vote_raw:
+            raw_vote_line = f"{persona} ({model}) raw vote response: {vote_raw}"
+            voting_log.append(raw_vote_line)
             cleaned_vote = "".join(filter(str.isdigit, vote_raw))
             if cleaned_vote and cleaned_vote[0] in persona_map:
                 final_vote = cleaned_vote[0]
@@ -360,18 +478,20 @@ def run_debate(user_question):
                 line = f"🗳️ {persona} ({model}) votes for: Argument {final_vote}"
                 st.write(line)
                 transcript_log.append(line)
+                voting_log.append(line)
             else:
                 votes[persona] = "Spoiled"
                 line = f"🗳️ {persona} ({model}) spoiled its ballot."
                 st.write(line)
                 transcript_log.append(line)
+                voting_log.append(line)
         time.sleep(1)
 
     # --- FINAL TALLY & LOGGING ---
     st.markdown("---")
     st.subheader("Final Results")
     transcript_log.append("\nFinal Results\n" + "-"*30)
-    
+    voting_log.append("\nFinal Results\n" + "-"*30)
     vote_counts = {"Spoiled": 0}
     for i in persona_map.keys(): vote_counts[i] = 0
     for vote in votes.values():
@@ -387,18 +507,23 @@ def run_debate(user_question):
             line = f"🎉 The winner is: {winning_persona} (Argument {winner_vote_num})! 🎉"
             st.header(line)
             transcript_log.append(line)
+            voting_log.append(line)
         else:
             line = "⚖️ The vote resulted in a TIE. No winner recorded. ⚖️"
             st.header(line)
             transcript_log.append(line)
+            voting_log.append(line)
     else:
         line = "⚖️ The vote was spoiled or a TIE. No winner recorded. ⚖️"
         st.header(line)
         transcript_log.append(line)
+        voting_log.append(line)
         
     st.markdown("---")
     st.subheader("Final Vote Tally")
-    transcript_log.append("\n--- Final Vote Tally ---")
+    tally_header = "\n--- Final Vote Tally ---"
+    transcript_log.append(tally_header)
+    voting_log.append(tally_header)
     
     for vote_num, count in vote_counts.items():
         if vote_num == "Spoiled":
@@ -408,53 +533,95 @@ def run_debate(user_question):
             line = f"Argument {vote_num} ({persona}): {count} vote(s)"
         st.write(line)
         transcript_log.append(line)
+        voting_log.append(line)
 
     if winning_persona != "TIE":
         log_debate_to_db(user_question, winning_persona, arguments_log)
-
     else:
         line = "\n[No clear winner; debate will not be logged to history.]\n"
         st.warning(line)
         transcript_log.append(line)
+        voting_log.append(line)
 
-    transcript_log.append("\n==============================\n" \
+    debate_footer = "\n==============================\n" \
                           "      Debate Concluded.             \n" \
-                          "==============================")
+                          "=============================="
+    transcript_log.append(debate_footer)
+    voting_log.append(debate_footer)
     
     save_transcript_to_file(transcript_log, user_question)
-
+    save_vote_transcript(voting_log, user_question)
 
 # --- NEW: Main Streamlit App Interface ---
-
 st.title("Local AI Persona Panel 🎙️")
 
-# --- NEW: Sidebar for viewing logs ---
-st.sidebar.title("Debate Log Viewer")
-log_files = sorted(glob.glob("debate_*.txt"), reverse=True)
-if not log_files:
-    st.sidebar.write("No debate transcripts found.")
-else:
-    selected_log = st.sidebar.selectbox("Select a debate to view:", log_files)
-    if selected_log:
-        try:
-            with open(selected_log, 'r', encoding='utf-8') as f:
-                st.sidebar.text_area("Transcript", f.read(), height=500)
-        except Exception as e:
-            st.sidebar.error(f"Error reading file: {e}")
+with st.expander("➕ Add New Panelist"):
+    with st.form("new_panelist_form", clear_on_submit=True):
+        new_name = st.text_input("New Panelist Name")
+        new_model = st.text_input("New Panelist Ollama Model (e.g., 'phi3:medium')", value="phi3:medium")
+        new_description = st.text_area("New Panelist Description", value="You are a helpful AI assistant.")
+        add_button = st.form_submit_button("Add Panelist")
 
+        if add_button and new_name:
+            if new_name not in st.session_state.PANELISTS:
+                st.session_state.PANELISTS[new_name] = new_model
+                st.session_state.PERSONA_DESCRIPTIONS[new_name] = new_description
+                st.success(f"Panelist '{new_name}' added!")
+            else:
+                st.warning(f"Panelist '{new_name}' already exists.")
+update_config()
+# --- Sidebar for viewing logs ---
+st.sidebar.title("Debate Log Viewer")
+
+# 1. Add the radio button toggle
+view_choice = st.sidebar.radio(
+    "Select transcript type:",
+    ("Full Transcripts", "Voting Transcripts"),
+    key='transcript_view' # Links to the session state we set
+)
+
+# 2. Conditionally select which file list to display
+files_to_display = []
+if view_choice == "Full Transcripts":
+    files_to_display = st.session_state.full_log_files
+    if not files_to_display:
+        st.sidebar.write("No full debate transcripts found.")
+else: # Must be "Voting Transcripts"
+    files_to_display = st.session_state.voting_log_files
+    if not files_to_display:
+        st.sidebar.write("No voting transcripts found.")
+
+# 3. Only show the selectbox if we have files
+if files_to_display:
+    selected_log = st.sidebar.selectbox("Select a debate to view:", files_to_display)
+    
+    if selected_log:
+        content = None
+        # Check if the selected log is already in our session_state cache
+        if st.session_state.log_content_cache["file"] == selected_log:
+            content = st.session_state.log_content_cache["content"]
+        else:
+            # If not in cache, read from disk
+            try:
+                with open(selected_log, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                # Save to cache
+                st.session_state.log_content_cache = {"file": selected_log, "content": content}
+            except Exception as e:
+                content = f"Error reading file: {e}"
+
+        # Display the content
+        if "Error reading file" in content:
+            st.sidebar.error(content)
+        else:
+            st.sidebar.text_area("Transcript", content, height=500)
 # --- NEW: Main debate interface ---
 st.header("Start a New Debate")
 user_question_input = st.text_input("Enter the ethical question for debate:")
 
 if st.button("Run Debate 🚀"):
     if user_question_input:
-        # This is where the magic happens
-        # We call the main function, and all st.write()
-        # calls inside it will stream to the UI.
+        st.info(f"Starting debate")
         run_debate(user_question_input)
     else:
         st.warning("Please enter a question for the debate.")
-
-# --- NEW: Run the DB init on startup ---
-if __name__ == "__main__":
-    init_db()

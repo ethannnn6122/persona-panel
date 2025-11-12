@@ -147,3 +147,6 @@ transcripts/
 
 # Vector store
 vector_store/
+
+# App data
+app_data/

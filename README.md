@@ -36,7 +36,6 @@ The project also features a basic memory system using a ChromaDB vector store to
     source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate`
     pip install -r requirements.txt
     ```
-    *(Note: A `requirements.txt` file does not currently exist. You will need to create one based on the imports in `app.py`)*
 
 3.  **Configure the Debators:**
     Open `app.py` and edit the `PANELISTS` dictionary to match the models you have downloaded in Ollama. You can also edit the `PERSONA_DESCRIPTIONS` to change the behavior of the debaters.

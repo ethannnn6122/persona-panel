@@ -1,4 +1,4 @@
+requests
 streamlit
 chromadb
 sentence-transformers
-requests
