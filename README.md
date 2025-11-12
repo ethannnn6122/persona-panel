@@ -37,16 +37,39 @@ The project also features a basic memory system using a ChromaDB vector store to
     pip install -r requirements.txt
     ```
 
-3.  **Configure the Debators:**
-    Open `app.py` and edit the `PANELISTS` dictionary to match the models you have downloaded in Ollama. You can also edit the `PERSONA_DESCRIPTIONS` to change the behavior of the debaters.
+3.  **Configure the Debaters (two ways)**
+
+    You can configure personas either by editing the defaults in the code (persistent) or by using the Streamlit UI (quick, in-app).
+
+    Option A — Streamlit UI (quick, in-app)
+
+    1.  Start the app with:
+
+        ```bash
+        streamlit run app.py
+        ```
+
+    2.  In the web UI you'll find two controls for persona management:
+        - `➕ Add New Panelist` — add a new persona by providing a name, the Ollama model (e.g., `phi3:medium`) and a description, then click **Add Panelist**.
+        - `⚙️ Manage Existing Panelist` — expand this to edit any existing persona. Each persona has a small form where you can rename the persona, change the Ollama model, update the description, save changes, or remove the persona entirely.
+
+    3.  Notes about the UI method:
+        - Saving changes in the UI updates Streamlit's session state and the app will rerun to show the new values.
+        - Changes made via the UI apply only to the running session (they are not written to the repository files). To make permanent changes, edit the defaults in code (Option B) and restart the app.
+
+    Option B — Edit defaults in code (persistent)
+
+    Edit the defaults near the top of `app.py` where `st.session_state.PANELISTS` and `st.session_state.PERSONA_DESCRIPTIONS` are initialized. For example:
 
     ```python
-    PANELISTS = {
-        "Modern Liberal": "phi3:mini",
-        "Modern Conservative": "gemma:2b",
-        "Libertarian": "qwen:4b"
+    st.session_state.PANELISTS = {
+        "Modern Liberal": "phi3:medium",
+        "Modern Conservative": "phi3:medium",
+        "Libertarian": "phi3:medium"
     }
     ```
+
+    After saving changes to `app.py`, restart the Streamlit app to load the new defaults.
 
 ## Usage
 
