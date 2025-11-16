@@ -1,12 +1,11 @@
 # Persona Panel
 
-This project is a Python-based application that simulates a debate between three AI "philosophers" with distinct personas: a Modern Liberal, a Modern Conservative, and a Libertarian. The application takes an ethical question from the user and orchestrates a three-phase debate. The AI responses are generated using the Ollama API, allowing you to use different local language models for each persona.
-
+This project is a Python-based application that simulates a debate between three AI "philosophers" with distinct personas. The application takes an ethical question from the user and orchestrates a three-phase debate. The AI responses are generated using the Ollama API, allowing you to use different local language models for each persona.
 The project also features a basic memory system using a ChromaDB vector store to provide historical context for arguments and an SQLite database to log past debates.
 
 ## Features
 
--   **Simulated Debates:** Watch three AI personas debate an ethical question you provide.
+-   **Simulated Debates:** Watch AI personas debate an ethical question you provide.
 -   **Customizable Personas:** Easily configure the personas and the language models that represent them.
 -   **Three-Phase Debate:** The debate unfolds in three stages:
     1.  **Opening Statements:** Each persona presents its initial argument.
@@ -20,7 +19,8 @@ The project also features a basic memory system using a ChromaDB vector store to
 
 -   Python 3.6+
 -   [Ollama](https://ollama.ai/) installed and running.
--   Some language models you could use (e.g., `phi3:mini`, `gemma:2b`, `qwen:4b`) downloaded and available in Ollama.
+-   Some language models you could use downloaded and available in Ollama.
+-   Recommend using at lest a 7B model to ensure the model(s) stay in character.
 
 ## Setup
 
@@ -101,7 +101,7 @@ This project includes two different front-ends for the debate simulation:
 
 -   **`app.py` (Web Application):** This is a graphical user interface built with [Streamlit](https://streamlit.io/). It allows you to run debates, view transcripts, and interact with the application through your web browser. This is the recommended way to use the application for a more user-friendly experience.
 
--   **`app_CLI.py` (Command-Line Interface):** This is a command-line application that runs entirely in your terminal. It provides the same debate functionality as the web application but without a graphical interface. This is useful for users who prefer to work in the terminal or for scripting and automation purposes.
+-   **`app_CLI.py` (Command-Line Interface):** This is a command-line application that runs entirely in your terminal. It provides the same core debate functionality as the web application but without a graphical interface and some additional features. This is useful for users who prefer to work in the terminal or for scripting and automation purposes.
 
 ## How It Works
 

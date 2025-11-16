@@ -2,3 +2,4 @@ requests
 streamlit
 chromadb
 sentence-transformers
+pyttsx3
