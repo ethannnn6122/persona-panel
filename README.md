@@ -1,6 +1,6 @@
 # Persona Panel
 
-This project is a Python-based application that simulates a debate between three AI "philosophers" with distinct personas. The application takes an ethical question from the user and orchestrates a three-phase debate. The AI responses are generated using the Ollama API, allowing you to use different local language models for each persona.
+This project is a Python-based application that simulates a debate between different AI "philosophers" with distinct personas. The application takes an ethical question from the user and orchestrates a three-phase debate. The AI responses are generated using the an API, allowing you to use different local language models for each persona.
 The project also features a basic memory system using a ChromaDB vector store to provide historical context for arguments and an SQLite database to log past debates.
 
 ## Features
@@ -17,9 +17,9 @@ The project also features a basic memory system using a ChromaDB vector store to
 
 ## Requirements
 
--   Python 3.6+
--   [Ollama](https://ollama.ai/) installed and running.
--   Some language models you could use downloaded and available in Ollama.
+-   Python 3.x
+-   [Ollama](https://ollama.ai/) OR [LMStudio] (https://lmstudio.ai) installed and running.
+-   Some language models you could use downloaded and available in Ollama/LMStudio.
 -   Recommend using at lest a 7B model to ensure the model(s) stay in character.
 
 ## Setup
@@ -33,13 +33,13 @@ The project also features a basic memory system using a ChromaDB vector store to
 2.  **Create a virtual environment and install the dependencies:**
     ```bash
     python -m venv .venv
-    source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate`
+    source .venv/bin/activate  # On Windows, use `.venv\Scripts\activate` (no source)
     pip install -r requirements.txt
     ```
 
 3.  **Configure the Debaters (two ways)**
 
-    You can configure personas either by editing the defaults in the code (persistent) or by using the Streamlit UI (quick, in-app).
+    You can configure personas by using the Streamlit UI .
 
     Option A — Streamlit UI (quick, in-app)
 
@@ -57,30 +57,24 @@ The project also features a basic memory system using a ChromaDB vector store to
         - Saving changes in the UI updates Streamlit's session state and the app will rerun to show the new values.
         - Changes made via the UI apply only to the running session (they are not written to the repository files). To make permanent changes, edit the defaults in code (Option B) and restart the app.
 
-    Option B — Edit defaults in code (persistent)
-
-    Edit the defaults near the top of `app.py` where `st.session_state.PANELISTS` and `st.session_state.PERSONA_DESCRIPTIONS` are initialized. For example:
-
-    ```python
-    st.session_state.PANELISTS = {
-        "Modern Liberal": "phi3:medium",
-        "Modern Conservative": "phi3:medium",
-        "Libertarian": "phi3:medium"
-    }
-    ```
-
-    After saving changes to `app.py`, restart the Streamlit app to load the new defaults.
-
 ## Usage
 
-There are two ways to run the Persona Panel application:
+There are different ways to run the Persona Panel application depending on setup:
 
-### Graphical User Interface
+### Graphical User Interface for Ollama
 
-To use the web-based graphical interface, run the `app.py` script:
+To use the web-based graphical interface, run the `app_Ollama.py` script:
 
 ```bash
-streamlit run app.py
+streamlit run app_Ollama.py
+```
+
+### Graphical User Interface for LMStudio
+
+To use the web-based graphical interface, run the `app_LMStudio.py` script:
+
+```bash
+streamlit run app_LMStudio.py
 ```
 
 This will open a new tab in your web browser with the application's user interface.
@@ -99,7 +93,7 @@ The application will then prompt you to enter an ethical question for the debate
 
 This project includes two different front-ends for the debate simulation:
 
--   **`app.py` (Web Application):** This is a graphical user interface built with [Streamlit](https://streamlit.io/). It allows you to run debates, view transcripts, and interact with the application through your web browser. This is the recommended way to use the application for a more user-friendly experience.
+-   **`app_Ollama.py\app_LMStudio.py` (Web Application):** This is a graphical user interface built with [Streamlit](https://streamlit.io/). It allows you to run debates, view transcripts, and interact with the application through your web browser. This is the recommended way to use the application for a more user-friendly experience.
 
 -   **`app_CLI.py` (Command-Line Interface):** This is a command-line application that runs entirely in your terminal. It provides the same core debate functionality as the web application but without a graphical interface and some additional features. This is useful for users who prefer to work in the terminal or for scripting and automation purposes.
 
@@ -107,7 +101,7 @@ This project includes two different front-ends for the debate simulation:
 
 1.  **Initialization:** The script initializes the SQLite and ChromaDB databases.
 2.  **User Input:** The user provides an ethical question.
-3.  **Opening Statements:** For each persona, the script constructs a prompt that includes the persona description, the user's question, and any relevant historical context from the vector store. It then sends this prompt to the corresponding language model via the Ollama API.
+3.  **Opening Statements:** For each persona, the script constructs a prompt that includes the persona description, the user's question, and any relevant historical context from the vector store. It then sends this prompt to the corresponding language model via the respective API.
 4.  **Rebuttals:** The script compiles all the opening statements and asks each persona to write a rebuttal that defends its original position and counters the other arguments.
 5.  **Voting:** Each persona is asked to act as an impartial judge and vote for the most persuasive argument.
 6.  **Results and Logging:** The votes are tallied, a winner is declared (if there is no tie), and the debate is logged to the databases. The winning arguments are flagged in the vector store to be used as positive examples in the future.

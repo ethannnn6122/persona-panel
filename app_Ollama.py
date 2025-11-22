@@ -128,6 +128,8 @@ if 'voting_log_files' not in st.session_state:
     st.session_state.voting_log_files = sorted(glob.glob(f"{TRANSCRIPT_DIR}/voting_*.txt"), reverse=True)
 if 'log_content_cache' not in st.session_state:
     st.session_state.log_content_cache = {"file": None, "content": None}
+if 'model_refresh_trigger' not in st.session_state:
+    st.session_state.model_refresh_trigger = 0
 
 # --- Cache the models and DB connection ---
 @st.cache_resource
@@ -271,14 +273,15 @@ def get_model_response(model_name, prompt):
             st.error(f"Error communicating with Ollama API for {model_name}: {e}")
             return None
 
-@st.cache_data
-def get_available_models():
+@st.cache_data(show_spinner=True)
+def get_available_models(refresh_trigger):
     """
     Try to query the local Ollama API for installed models.
     """
     try:
         # Derive base URL from the generate endpoint constant
         base = OLLAMA_API_URL
+        print(f"[Running get_available_models with trigger {refresh_trigger}]")
         if base.endswith('/api/generate'):
             base = base[: -len('/api/generate')]
         endpoint = '/api/tags'
@@ -349,7 +352,7 @@ def update_config():
                     key=f"name_{persona_name}"
                 )
                 # Try to present a dropdown of installed Ollama models
-                available_models = get_available_models()
+                available_models = get_available_models(st.session_state.model_refresh_trigger)
                 options = available_models
                 current_model = st.session_state.PANELISTS.get(persona_name, "")
                 default_index = options.index(current_model) if current_model in options else 0
@@ -661,11 +664,14 @@ def run_debate(user_question):
 
 # --- Main Streamlit App Interface ---
 st.title("Local AI Persona Panel 🎙️")
+if st.button("Refresh Models"):
+    st.session_state.model_refresh_trigger += 1
+    st.rerun()
 with st.expander("➕ Add New Panelist"):
     with st.form("new_panelist_form", clear_on_submit=True):
         new_name = st.text_input("New Panelist Name")
         # Dropdown of available models
-        available_models = get_available_models()
+        available_models = get_available_models(st.session_state.model_refresh_trigger)
         new_options = available_models
         default_index = 1 if len(available_models) > 0 else 0
         new_model_choice = st.selectbox("New Panelist Ollama Model", options=new_options, index=default_index, key="new_model_select")
