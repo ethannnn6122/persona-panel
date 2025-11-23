@@ -18,7 +18,7 @@ The project also features a basic memory system using a ChromaDB vector store to
 ## Requirements
 
 -   Python 3.x
--   [Ollama](https://ollama.ai/) OR [LMStudio] (https://lmstudio.ai) installed and running.
+-   [Ollama](https://ollama.ai/) OR [LMStudio](https://lmstudio.ai) installed and running.
 -   Some language models you could use downloaded and available in Ollama/LMStudio.
 -   Recommend using at lest a 7B model to ensure the model(s) stay in character.
 
